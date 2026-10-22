@@ -61,8 +61,8 @@ charge point is never read into Gladys.
 
 - **Stop the charge** is always available: no option, never held back by a
   pause asked by Monta nor by the limit of requests. It reads the charges of
-  the charge point first when that leaves room (a read of the last 30 s is
-  reused), else it stops the charge in progress known from the last read
+  the charge point first when that leaves room (a read made by a stop of
+  the same charge point in the last 30 s is reused, never a periodic read), else it stops the charge in progress known from the last read
   (kept in `/data`, so it works right after a restart). A charge kept as in
   progress is never dropped because it left the list of the last 7 days
   while the charge point is busy.

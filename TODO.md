@@ -65,8 +65,9 @@ up to date at the end of every milestone.
   binary. Stop: no option (protective), never held back by a pause, a block or
   the limit (one request then), shared when clicked twice. Its charge: the one
   in progress of a fresh read (one request when it leaves room for the stop
-  and, when the periodic read is due, for that read too; a read of the last
-  30 s, periodic or not, is reused), else the charge kept (never one the fresh
+  and, when the periodic read is due, for that read too; only a read made
+  by a stop of the same charge point in the last 30 s is reused, never a
+  periodic one: a charge may start right after it), else the charge kept (never one the fresh
   read saw finished). A charge kept as in progress is let go only when seen
   finished or when the charge point is no longer busy: absent from the bounded
   7-day read is never "nothing in progress". Success without sending only
@@ -123,3 +124,11 @@ up to date at the end of every milestone.
   configuration never pauses, blocks nor sets the status of the new one.
 - At most 50 charge points, 2 pages of 100 per read; charges read over 7
   days, 100 per request.
+- A start is refused while a charge kept as in progress is not seen finished
+  and the charge point is busy (it may have left the 7-day list).
+- A stop has no deadline to leave (protective): it goes as soon as a token
+  is in hand. Gladys is told "sent, without confirmation" only if it really
+  left by the answer; otherwise "not sent yet, it leaves with the token".
+- The status after a failed read of the charges names the scope only for a
+  403; an outage says the charges are unavailable and when they are tried
+  again.

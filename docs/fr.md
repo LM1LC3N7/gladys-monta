@@ -64,7 +64,8 @@ compterait deux fois. L'emplacement de la borne n'est jamais lu dans Gladys.
 - **Arrêter la charge** est toujours disponible : sans option, jamais bloqué
   par une pause demandée par Monta ni par la limite de requêtes. Il lit
   d'abord les charges de la borne quand cela laisse de la place (une lecture
-  des 30 dernières secondes est réutilisée), sinon il arrête la charge en
+  faite par un arrêt de la même borne dans les 30 dernières secondes est
+  réutilisée, jamais une lecture périodique), sinon il arrête la charge en
   cours connue à la dernière lecture (gardée dans `/data`, donc possible
   juste après un redémarrage). Une charge gardée comme en cours n'est jamais
   oubliée parce qu'elle sort de la liste des 7 derniers jours tant que la

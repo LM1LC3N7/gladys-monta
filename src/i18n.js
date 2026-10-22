@@ -84,6 +84,11 @@ export const T = {
     'The charges could not be read (the application needs the "charge-transactions" scope): the energy and the battery of the charge wait for the next read.',
     "Les charges n'ont pas pu être lues (l'application a besoin de la portée « charge-transactions ») : l'énergie et la batterie de la charge attendent la prochaine lecture.",
   ),
+  chargesDown: (wait) =>
+    both(
+      `The charges are unavailable for now (Monta did not answer them): new try in ${wait.en}; the energy and the battery of the charge wait.`,
+      `Les charges sont indisponibles pour l'instant (Monta ne les a pas données) : nouvel essai dans ${wait.fr} ; l'énergie et la batterie de la charge attendent.`,
+    ),
   noChargePoint: both(
     'Connected to Monta, but the account shows no charge point.',
     "Connecté à Monta, mais le compte n'a aucune borne.",
@@ -177,6 +182,14 @@ export const ERRORS = {
       `A charge is already in progress (${state.en}): the start was not sent.`,
       `Une charge est déjà en cours (${state.fr}) : le démarrage n'a pas été envoyé.`,
     ),
+  chargeKept: both(
+    'A charge is still in progress on this charge point (kept since an earlier read): the start was not sent.',
+    "Une charge est encore en cours sur cette borne (gardée depuis une lecture précédente) : le démarrage n'a pas été envoyé.",
+  ),
+  stopWaiting: both(
+    'Stop not sent yet: it waits for a token from Monta and leaves as soon as it gets one; the state follows.',
+    "Arrêt pas encore envoyé : il attend un jeton de Monta et part dès qu'il l'obtient ; l'état suivra.",
+  ),
   stopMeanwhile: both(
     'A stop arrived meanwhile: the start was not sent.',
     "Un arrêt est arrivé entre-temps : le démarrage n'a pas été envoyé.",

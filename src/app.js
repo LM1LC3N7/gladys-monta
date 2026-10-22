@@ -425,9 +425,12 @@ export class MontaApp {
           this.logger.info(`Monta charges not read: ${errorReason(err)}`);
           if (err.kind === 'forbidden') {
             this.skipChargesUntil = this.now() + TIMINGS.secondaryForbiddenSkip;
+            this.chargesProblem = 'scope';
           } else if (err.kind === 'rate_limited') {
             held = err;
+            this.chargesProblem = 'down';
           } else {
+            this.chargesProblem = 'down';
             // A secondary endpoint down never pauses the rest: only it waits.
             const backoff = TIMINGS.backoff;
             this.skipChargesUntil =
@@ -443,7 +446,13 @@ export class MontaApp {
       if (generation !== this.generation) {
         return;
       }
-      await this.succeeded(points.size, points.size > 0 && list === undefined);
+      if (list) {
+        this.chargesProblem = undefined;
+      }
+      await this.succeeded(
+        points.size,
+        points.size > 0 && list === undefined ? (this.chargesProblem ?? 'down') : undefined,
+      );
       if (held && generation === this.generation) {
         await this.failed(held);
       }
@@ -493,7 +502,14 @@ export class MontaApp {
       await this.saveMemory();
     }
     const message = count === 0 ? T.noChargePoint : T.connected(count);
-    await this.setStatus(true, chargesMissing ? join(message, T.chargesMissing) : message);
+    // A 403 on the charges asks for the scope; an outage only says it waits.
+    const extra =
+      chargesMissing === 'scope'
+        ? T.chargesMissing
+        : chargesMissing
+          ? T.chargesDown(age(Math.max(0, this.skipChargesUntil - this.now())))
+          : undefined;
+    await this.setStatus(true, extra ? join(message, extra) : message);
   }
 
   blockMessage() {
@@ -598,7 +614,6 @@ export class MontaApp {
     this.points = next;
     this.readOnce = true;
     const known = new Map();
-    const now = this.now();
     for (const [id, { point }] of next) {
       const previous = this.known.get(id) ?? null;
       let kept = previous;
@@ -612,8 +627,7 @@ export class MontaApp {
           const finished = last !== undefined && !isActive(last);
           kept = previous !== null && !finished && busy(point.state) ? previous : null;
         }
-        // The read serves the stops of the next 30 s.
-        this.freshReads.set(id, { at: now, active: active ?? null });
+        // Never reused by a stop: a charge may start right after a read.
       }
       known.set(id, kept);
     }
@@ -940,6 +954,7 @@ export class MontaApp {
     const client = this.client;
     let point;
     let active;
+    let keptOn;
     try {
       const [pointJson, charges] = await Promise.all([
         client.chargePoint(id, { deadline: readBy, login: 'once' }),
@@ -954,6 +969,15 @@ export class MontaApp {
       ]);
       point = readChargePoint(pointJson);
       active = activeCharge(charges, id);
+      // A charge kept as in progress that this read does not show finished
+      // (it may have left the 7-day list): still in progress.
+      const kept = this.known.get(id) ?? null;
+      keptOn =
+        kept !== null &&
+        !charges.some((item) => {
+          const charge = readCharge(item);
+          return charge?.id === kept && !isActive(charge);
+        });
     } catch (err) {
       if (err.kind === 'rate_limited' && generation === this.generation) {
         await this.failed(err, generation);
@@ -980,6 +1004,9 @@ export class MontaApp {
     if (point.state === POINT_STATE.BUSY_CHARGING) {
       // Charging, though no charge of the bounded list shows it: already so.
       return undefined;
+    }
+    if (keptOn && busy(point.state)) {
+      throw this.refusal(ERRORS.chargeKept);
     }
     if (NOT_READY.has(point.state)) {
       throw this.refusal(ERRORS.notReady(POINT_STATE_NAMES[point.state]));
@@ -1159,9 +1186,14 @@ export class MontaApp {
     const landing = mayLand();
     this.logger.info(`Monta: stop on charge point ${id}`);
     this.freshReads.delete(id);
+    // Protective: no deadline to leave, it goes as soon as a token is in hand;
+    // whether it really left is noted for the answer to Gladys.
+    let left = false;
     const request = client.stop(chargeId, {
-      sendBy: Math.max(sendBy, this.now() + TIMINGS.commandMinSend),
       login,
+      beforeSend: () => {
+        left = true;
+      },
     });
     // The watch begins when the stop leaves: a late start is stopped again.
     this.watch(id, { chargeId, mayLand: landing });
@@ -1182,7 +1214,7 @@ export class MontaApp {
           await this.commandError(err, { id, isStop: true, generation });
         })
         .catch(() => {});
-      throw this.refusal(ERRORS.pending);
+      throw this.refusal(left ? ERRORS.pending : ERRORS.stopWaiting);
     }
     if (outcome.err) {
       throw await this.commandError(outcome.err, { id, isStop: true, generation });
