@@ -1,177 +1,153 @@
 {
   "manifest_version": 1,
   "type": "device",
-  "name": "Demo Devices Template",
+  "name": "Monta",
   "description": {
-    "en": "Starter template showing sensors, a switch, a dimmable light and a smart plug.",
-    "fr": "Template de démarrage : capteurs, interrupteur, lampe variable et prise connectée."
+    "en": "Charge points managed by Monta, official API: state, energy of the charge; start and stop.",
+    "fr": "Bornes gérées par Monta, API officielle : état, énergie de la charge ; démarrage et arrêt."
   },
-  "version": "1.0.0",
-  "docker_image": "ghcr.io/gladysassistant/integration-template-js:1.0.0",
+  "version": "0.1.0",
+  "docker_image": "ghcr.io/lm1lc3n7/gladys-monta:0.1.0",
   "gladys_version": ">=5.1.0",
-  "cover_image": "https://raw.githubusercontent.com/GladysAssistant/integration-template-js/master/cover.png",
-  "categories": ["lighting", "security", "environment"],
-  "transports": ["local", "cloud"],
+  "cover_image": "https://raw.githubusercontent.com/LM1LC3N7/gladys-monta/main/cover.png",
+  "categories": ["energy"],
+  "transports": ["cloud"],
   "config_schema": [
     {
       "key": "intro",
       "type": "section",
-      "label": { "en": "Getting started", "fr": "Pour commencer" },
+      "label": {
+        "en": "Your Monta charge points",
+        "fr": "Vos bornes Monta"
+      },
       "description": {
-        "en": "The demo weather station reads real data from the free Open-Meteo API: pick the coordinates to observe. No account, no API key.",
-        "fr": "La station météo de démonstration lit de vraies données via l'API gratuite Open-Meteo : choisissez les coordonnées à observer. Pas de compte, pas de clé d'API."
+        "en": "Shows the charge points of your Monta account in Gladys through the official Monta public API: state, vehicle plugged in, state and energy of the charge, vehicle battery (when the vehicle reports it), meter reading. The API gives no instantaneous power. In the Monta portal (portal2.monta.app), open Applications, add an application with the \"charge-points\" and \"charge-transactions\" scopes (and \"control-charging\" for the buttons), then copy its client id and client secret below and save; add the charge points from the Discovery tab. Stopping a charge is always possible from Gladys; starting one only if you allow it below. Monta allows 10 requests per minute for all your applications: a read takes two. Never tested with a real charge point. Not affiliated with Monta.",
+        "fr": "Affiche les bornes de votre compte Monta dans Gladys par l'API publique officielle de Monta : état, véhicule branché, état et énergie de la charge, batterie du véhicule (quand il la transmet), relevé du compteur. L'API ne donne pas de puissance instantanée. Dans le portail Monta (portal2.monta.app), ouvrez Applications, ajoutez une application avec les portées « charge-points » et « charge-transactions » (et « control-charging » pour les boutons), puis copiez son identifiant client et son secret client ci-dessous et enregistrez ; ajoutez les bornes depuis l'onglet Découverte. Arrêter une charge est toujours possible depuis Gladys ; en démarrer une seulement si vous l'autorisez ci-dessous. Monta autorise 10 requêtes par minute pour toutes vos applications : une lecture en prend deux. Jamais testé avec une vraie borne. Sans lien avec Monta."
       },
       "links": [
         {
-          "url": "https://open-meteo.com/en/docs",
-          "label": { "en": "Open-Meteo documentation", "fr": "Documentation Open-Meteo" }
+          "url": "https://docs.public-api.monta.com/reference/home",
+          "label": {
+            "en": "Monta public API: getting the credentials",
+            "fr": "API publique Monta : obtenir les identifiants"
+          }
+        },
+        {
+          "url": "https://github.com/LM1LC3N7/gladys-monta/blob/main/docs/fr.md",
+          "label": {
+            "en": "Guide (French)",
+            "fr": "Guide (français)"
+          }
+        },
+        {
+          "url": "https://github.com/LM1LC3N7/gladys-monta/blob/main/docs/en.md",
+          "label": {
+            "en": "Guide (English)",
+            "fr": "Guide (anglais)"
+          }
         }
       ]
     },
     {
-      "key": "latitude",
-      "type": "number",
-      "label": { "en": "Latitude", "fr": "Latitude" },
-      "description": {
-        "en": "Latitude used for the demo weather sensor.",
-        "fr": "Latitude utilisée par le capteur météo de démonstration."
+      "key": "client_id",
+      "type": "string",
+      "label": {
+        "en": "Client id",
+        "fr": "Identifiant client"
       },
-      "placeholder": { "en": "e.g. 48.8566", "fr": "ex. 48.8566" },
-      "required": true,
-      "default": 48.8566,
-      "min": -90,
-      "max": 90
-    },
-    {
-      "key": "longitude",
-      "type": "number",
-      "label": { "en": "Longitude", "fr": "Longitude" },
       "description": {
-        "en": "Longitude used for the demo weather sensor.",
-        "fr": "Longitude utilisée par le capteur météo de démonstration."
+        "en": "The client id of your Monta application (Monta portal, Applications).",
+        "fr": "L'identifiant client de votre application Monta (portail Monta, Applications)."
       },
-      "placeholder": { "en": "e.g. 2.3522", "fr": "ex. 2.3522" },
       "required": true,
-      "default": 2.3522,
-      "min": -180,
-      "max": 180
+      "default": ""
     },
     {
-      "key": "unit",
-      "type": "select",
-      "label": { "en": "Temperature unit", "fr": "Unité de température" },
-      "required": false,
-      "default": "celsius",
-      "options": [
-        { "value": "celsius", "label": { "en": "Celsius", "fr": "Celsius" } },
-        { "value": "fahrenheit", "label": { "en": "Fahrenheit", "fr": "Fahrenheit" } }
-      ]
-    },
-    {
-      "key": "poll_frequency",
-      "type": "number",
-      "label": { "en": "Refresh interval (s)", "fr": "Intervalle de rafraîchissement (s)" },
+      "key": "client_secret",
+      "type": "secret",
+      "label": {
+        "en": "Client secret",
+        "fr": "Secret client"
+      },
       "description": {
-        "en": "How often sensors are polled, in seconds (one minute minimum).",
-        "fr": "Fréquence d'interrogation des capteurs, en secondes (une minute minimum)."
+        "en": "The client secret of the application, shown once by Monta (use Reset there if it is lost). Kept by Gladys in its database, never shown again, sent only to Monta, over HTTPS, to get an access token. Refused, it is never tried again automatically: save corrected credentials or click \"Test the connection\".",
+        "fr": "Le secret client de l'application, affiché une seule fois par Monta (utilisez Réinitialiser chez Monta s'il est perdu). Gardé par Gladys dans sa base, jamais réaffiché, envoyé seulement à Monta, en HTTPS, pour obtenir un jeton d'accès. Refusé, il n'est jamais réessayé automatiquement : enregistrez des identifiants corrigés ou cliquez sur « Tester la connexion »."
+      },
+      "required": true
+    },
+    {
+      "key": "allow_start",
+      "type": "boolean",
+      "label": {
+        "en": "Allow starting a charge",
+        "fr": "Autoriser le démarrage d'une charge"
+      },
+      "description": {
+        "en": "Off by default. On: the \"Start a charge\" button of each charge point may start a charge, only when a vehicle is plugged in and no charge is in progress (checked on a fresh read just before sending). Off: it refuses every command. \"Stop the charge\" is always available, even during a pause asked by Monta.",
+        "fr": "Désactivé par défaut. Activé : le bouton « Démarrer une charge » de chaque borne peut démarrer une charge, seulement quand un véhicule est branché et qu'aucune charge n'est en cours (vérifié sur une lecture fraîche juste avant l'envoi). Désactivé : il refuse toute commande. « Arrêter la charge » reste toujours disponible, même pendant une pause demandée par Monta."
       },
       "required": false,
-      "default": 300,
+      "default": false
+    },
+    {
+      "key": "poll_interval",
+      "type": "number",
+      "label": {
+        "en": "Refresh interval (s)",
+        "fr": "Intervalle de rafraîchissement (s)"
+      },
+      "description": {
+        "en": "How often Monta is read, in seconds (two requests per read; Monta allows 10 per minute for all your applications).",
+        "fr": "Fréquence de lecture de Monta, en secondes (deux requêtes par lecture ; Monta en autorise 10 par minute pour toutes vos applications)."
+      },
+      "required": false,
+      "default": 120,
       "min": 60,
       "max": 3600
+    },
+    {
+      "key": "language",
+      "type": "select",
+      "label": {
+        "en": "Language of the feature names",
+        "fr": "Langue des noms des fonctionnalités"
+      },
+      "description": {
+        "en": "Used for the feature names of the devices added from now on, for the state texts and for the command errors.",
+        "fr": "Sert aux noms des fonctionnalités des appareils ajoutés désormais, aux textes d'état et aux erreurs des commandes."
+      },
+      "required": false,
+      "default": "fr",
+      "options": [
+        {
+          "value": "fr",
+          "label": {
+            "en": "French",
+            "fr": "Français"
+          }
+        },
+        {
+          "value": "en",
+          "label": {
+            "en": "English",
+            "fr": "Anglais"
+          }
+        }
+      ]
     }
   ],
   "actions": [
     {
-      "key": "test_weather",
-      "label": { "en": "Test the weather provider", "fr": "Tester le fournisseur météo" },
-      "timeout_seconds": 30
-    },
-    {
-      "key": "identify",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ]
-    }
-  ],
-  "scene_triggers": [
-    {
-      "key": "motion_detected",
-      "label": { "en": "Motion detected", "fr": "Mouvement détecté" },
-      "description": {
-        "en": "A demo motion sensor saw a person or an animal move.",
-        "fr": "Un détecteur de démonstration a vu bouger une personne ou un animal."
+      "key": "test_connection",
+      "label": {
+        "en": "Test the connection",
+        "fr": "Tester la connexion"
       },
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Sensor", "fr": "Détecteur" }
-        },
-        {
-          "key": "target",
-          "type": "multi_select",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" },
-          "options": [
-            { "value": "person", "label": { "en": "Person", "fr": "Personne" } },
-            { "value": "animal", "label": { "en": "Animal", "fr": "Animal" } }
-          ]
-        }
-      ],
-      "variables": [
-        {
-          "key": "target",
-          "type": "string",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" }
-        }
-      ]
-    }
-  ],
-  "scene_actions": [
-    {
-      "key": "identify_device",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
       "description": {
-        "en": "Make a device signal itself (the demo light blinks).",
-        "fr": "Fait se signaler un appareil (la lampe de démonstration clignote)."
+        "en": "Reads Monta once, if the interval since the last read has passed, and shows the result. After refused credentials, it is the only way to try them again (with saving corrected ones).",
+        "fr": "Lit Monta une fois, si l'intervalle depuis la dernière lecture est passé, et affiche le résultat. Après des identifiants refusés, c'est le seul moyen de les réessayer (avec l'enregistrement d'identifiants corrigés)."
       },
-      "timeout_seconds": 15,
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ],
-      "outputs": [
-        {
-          "key": "signalled",
-          "type": "boolean",
-          "label": { "en": "Device signalled", "fr": "Appareil signalé" }
-        }
-      ]
-    }
-  ],
-  "widgets": [
-    {
-      "key": "demo_status",
-      "label": { "en": "Demo status", "fr": "État de la démo" },
-      "description": {
-        "en": "Live temperature and plug power, plug connection and observed location.",
-        "fr": "Température et puissance en direct, connexion de la prise, position observée."
-      },
-      "icon": "activity",
-      "action_timeout_seconds": 15
+      "timeout_seconds": 60
     }
   ]
 }
