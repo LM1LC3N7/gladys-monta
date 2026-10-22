@@ -16,8 +16,10 @@ charge; another one starts it, only if you allow it.
 2. Open the user menu (bottom left), then **Applications**, then
    **+ Add Application**. Give it the scopes:
    - `charge-points` (the charge points; required),
-   - `charge-transactions` (the charges: energy, battery, state; recommended),
-   - `control-charging` (only for the start and stop buttons).
+   - `charge-transactions` (the charges: energy, battery, state; **required
+     for the stop and start buttons**: without it, the integration never
+     knows which charge to stop),
+   - `control-charging` (for the start and stop buttons).
 3. Copy the **client id** and the **client secret**. Monta shows the secret
    only once: if you lose it, use **Reset** in the list of applications.
 
@@ -58,34 +60,57 @@ charge point is never read into Gladys.
 ## Commands
 
 - **Stop the charge** is always available: no option, never held back by a
-  pause asked by Monta. It reads the charges of the charge point first when
-  it can, else it stops the charge in progress known from the last read (kept
-  in `/data`, so it works right after a restart). For 90 s after a stop, a
-  charge that comes back is stopped again (twice at most); a charge someone
-  starts later from the Monta app is left alone.
+  pause asked by Monta nor by the limit of requests. It reads the charges of
+  the charge point first when that leaves room (a read of the last 30 s is
+  reused), else it stops the charge in progress known from the last read
+  (kept in `/data`, so it works right after a restart). A charge kept as in
+  progress is never dropped because it left the list of the last 7 days
+  while the charge point is busy.
+- After a stop, the integration watches the charge point for 90 s, and at
+  least until the next read: if the stopped charge draws again, the stop is
+  sent again, twice at most; a resend that fails is not counted and the
+  watch then lasts up to 10 minutes, with a read at most every minute. When
+  a start sent by Gladys may still land (sent without confirmation), any
+  charge in progress on the charge point (scheduled, reserved or paused
+  included) is stopped during the watch: a charge started from the Monta app
+  in that window is stopped too. Otherwise a charge someone starts later is
+  left alone.
+- A stop that cannot act says why: no charge known and the charges could not
+  be read (with the reason: pause asked by Monta, limit of requests, an HTTP
+  error...), or the charge point is charging but no charge of the last 7 days
+  is in progress (a charge started more than 7 days ago: stop it from the
+  Monta app). Nothing sent is never reported as "sent".
 - **Start a charge** refuses unless "Allow starting a charge" is on. It reads
   the charge point and its charges just before sending, and sends only when
   a vehicle is plugged in, the charge point is ready and no charge is in
-  progress. The option is checked again right before sending; a stop clicked
-  meanwhile cancels it. Gladys gets its answer within 5 s: a start not
-  answered by then is reported "sent, without confirmation" and the state
-  follows.
+  progress (a charge point already charging: nothing is sent). The option is
+  checked again right before sending; a stop clicked meanwhile cancels it.
+  Gladys gets its answer within 5 s: a start not answered by then is reported
+  "sent, without confirmation" and the state follows.
 - Both are buttons, never switches: a "turn everything off" can never reach
   them.
 
 ## Limits and errors
 
 - Monta allows **10 requests per minute** for all the applications of your
-  account. A read takes two requests (three when the token is renewed) and
-  starts only when four stay free for the commands.
+  account. A read takes two requests (up to five with a second page, a token
+  renewal and a new try) and starts only when those five and three more for
+  a stop are free; the requests of the last minute are kept across a
+  restart. A start needs five free requests.
+- The charges are read over the last 7 days (`fromDate` of the API): a
+  charge started more than 7 days ago and never seen by the integration is
+  not shown.
 - Refused client id or secret: the integration stops for good (no automatic
   try, which could lock the application). Save corrected credentials, or
   click **Test the connection** once they are fixed on the Monta side.
 - A 403 on the charge points (missing `charge-points` scope) stops the same
-  way. A 403 on the charges only leaves the charge features as they were; a
-  403 on a command only refuses that command.
-- A 429 (too many requests) or a Monta outage pauses the reads (kept across a
-  restart); stopping a charge stays possible.
+  way (no fingerprint kept: saving the credentials again, or the test
+  button, tries again). A 403 or an outage on the charges only leaves the
+  charge features as they were; a 403 on a command only refuses that
+  command.
+- A 429 (too many requests) or a Monta outage of the charge points pauses the
+  reads (kept across a restart, for that account only); stopping a charge
+  stays possible.
 - The integration never reads Monta sooner than the interval: not on a
   restart, a reconnection, an unchanged configuration saved, nor the test
   button. Only new credentials saved are tried at once.
@@ -93,7 +118,8 @@ charge point is never read into Gladys.
 ## Privacy
 
 Nothing secret is written to `/data`: only the time of the last read, the
-pauses, the ids of the charge points and of their charge in progress, and,
+times of the requests of the last minute, the pauses, the ids of the charge
+points and of their charge in progress, and,
 after refused credentials, a salted fingerprint of those refused credentials
 (erased at the first success). Tokens live in memory only and never reach the
 logs.

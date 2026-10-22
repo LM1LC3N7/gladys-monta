@@ -23,13 +23,17 @@ Never tested with a real charge point. Not affiliated with Monta.
 - **Reads**: every interval (120 s by default), `charge-points` then
   `charges` (the last 7 days, all charge points at once). Monta allows 10
   requests per minute for all the applications of a user: a read starts only
-  when four requests stay free for the commands.
+  when its five possible requests and three for a stop are free; the
+  requests of the last minute are kept in `/data` across a restart.
 - **Devices**: one per charge point, keyed by its Monta id. Read-only
   features, plus two `button/push` features (start, stop): never a switch.
-- **Commands**: stop always possible (also during a 429/5xx pause, from the
-  charge kept in `/data` after a restart), reaffirmed for 90 s if a start of
-  ours may still land; start behind `allow_start` (off), decided on a fresh
-  read, option checked again right before sending, cancelled by a stop.
+- **Commands**: stop always possible (also during a 429/5xx pause or at the
+  limit, from the charge kept in `/data` after a restart; a kept charge that
+  left the 7-day read is never taken for "nothing in progress"), watched for
+  90 s, up to 10 min when its resends fail; start behind `allow_start` (off),
+  decided on a fresh read, never on a charge point already charging, option
+  checked again right before sending, cancelled by a stop. Nothing that did
+  not leave is ever reported "sent".
 - **Errors**: refused credentials (or a 403 on the charge points) stop for
   good, persisted, with no automatic try; 429 and 5xx pause, persisted and
   bounded; never a read sooner than the interval.

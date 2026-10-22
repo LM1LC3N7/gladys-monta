@@ -412,7 +412,12 @@ test('a stop after a restart, before the first read: the charge kept in /data', 
   const pending = again.setValue(deviceOf(ctx.gladys), featureOf(ctx.gladys, FEATURES.STOP), 1);
   await ctx.advance(500, 100);
   await pending;
-  assert.deepEqual(server.routes().slice(count), ['POST auth/token', 'POST charges/970/stop']);
+  // Room left: one fresh read first, then the stop.
+  assert.deepEqual(server.routes().slice(count), [
+    'POST auth/token',
+    'GET charges',
+    'POST charges/970/stop',
+  ]);
 });
 
 test('a 403 on a command refuses that command only: the reads go on', async (t) => {

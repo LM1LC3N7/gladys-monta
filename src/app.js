@@ -19,13 +19,21 @@ import {
   DRAWING_CHARGE_STATES,
   FEATURES,
   LIMITS,
-  MINUTE,
   POINT_STATE,
   PRESSED,
   TIMINGS,
 } from './constants.js';
 import { COMMAND_ROLES, buildDevice, deviceStates, parseFeatureId, pointIds } from './devices.js';
-import { CHARGE_STATE_NAMES, ERRORS, POINT_STATE_NAMES, T, age, join, word } from './i18n.js';
+import {
+  CHARGE_STATE_NAMES,
+  ERRORS,
+  POINT_STATE_NAMES,
+  REASONS,
+  T,
+  age,
+  join,
+  word,
+} from './i18n.js';
 import {
   activeCharge,
   currentCharges,
@@ -54,6 +62,9 @@ const NOT_READY = new Set([
 ]);
 /** Charge states that confirm a stop. */
 const STOPPED = new Set([CHARGE_STATE.STOPPED, CHARGE_STATE.COMPLETED]);
+
+/** A charge point that is busy (a charge may be in progress). */
+const busy = (state) => typeof state === 'string' && state.startsWith('busy');
 
 /** A refusal decided here (never sent): its message is shown as is. */
 class Refusal extends Error {}
@@ -126,6 +137,10 @@ export class MontaApp {
     this.published = undefined;
     this.badges = undefined;
     this.skipChargesUntil = 0;
+    this.chargesFailures = 0;
+    /** id -> { at, active } of the last read of a charge point's charges. */
+    this.freshReads = new Map();
+    this.lastFollowUpAt = -Infinity;
     this.warned = new Set();
   }
 
@@ -149,23 +164,34 @@ export class MontaApp {
       return;
     }
     const { account, clientId, clientSecret } = this.config;
-    // A 429 or 5xx pause survives a restart and a change of account.
+    // The requests of the last minute survive a restart (the limit of Monta).
+    this.limiter.restore(this.memory.requests);
+    // A 429 or 5xx pause survives a restart, for its own account only.
     const pause = this.memory.pause;
-    if (pause && pause.until > this.now()) {
+    this.pausedUntil = 0;
+    this.pauseKind = undefined;
+    if (pause && pause.account === account && pause.until > this.now()) {
       this.pausedUntil = pause.until;
       this.pauseKind = pause.kind;
     }
-    // A stop holds only for the very credentials that were refused.
+    // A refusal holds only for the very credentials that were refused; a 403
+    // on the charge points (credentials accepted) holds for the account, until
+    // credentials are saved again or the test button succeeds.
     const block = this.memory.block;
     if (block) {
-      if (
+      const same =
         block.account === account &&
-        fingerprint(block.salt, clientId, clientSecret) === block.fingerprint
-      ) {
+        (block.kind === 'forbidden'
+          ? !newCredentials
+          : fingerprint(block.salt, clientId, clientSecret) === block.fingerprint);
+      if (same) {
         this.block = block;
       } else {
         this.memory.block = null;
         await this.saveMemory();
+        if (generation !== this.generation) {
+          return;
+        }
       }
     }
     if (this.memory.points?.account === account) {
@@ -270,6 +296,8 @@ export class MontaApp {
   }
 
   async saveMemory() {
+    // The requests of the last minute go along (times only).
+    this.memory.requests = this.limiter.recent();
     await this.store
       .save(this.memory)
       .catch((err) => this.logger.warn(`Saving the state to /data failed: ${err.message}`));
@@ -350,8 +378,8 @@ export class MontaApp {
       this.scheduleNext();
       return;
     }
-    // Room for the read (the token, the charge points, the charges) and the commands.
-    const need = 3 + LIMITS.reservedForCommands;
+    // Room for the whole read and for a stop after it.
+    const need = LIMITS.readNeed + LIMITS.reservedForCommands;
     const wait = this.limiter.waitFor(need);
     if (wait > 0) {
       this.clearTimer();
@@ -365,6 +393,9 @@ export class MontaApp {
     }
     this.client.beginCycle();
     this.immediate = false;
+    if (followUp) {
+      this.lastFollowUpAt = this.now();
+    }
     await this.noteAttempt();
     if (generation !== this.generation) {
       return;
@@ -384,31 +415,35 @@ export class MontaApp {
         `Monta: only the first ${LIMITS.chargePoints} charge points are shown`,
       );
       // Secondary: the charges. Never a stop: the charge points are shown anyway.
-      let charges;
+      let list;
       let held;
       if (points.size > 0 && this.now() >= this.skipChargesUntil) {
         try {
-          charges = currentCharges(
-            await client.charges({ from: this.now() - TIMINGS.chargesWindow }),
-          );
+          list = await client.charges({ from: this.now() - TIMINGS.chargesWindow });
+          this.chargesFailures = 0;
         } catch (err) {
           this.logger.info(`Monta charges not read: ${errorReason(err)}`);
           if (err.kind === 'forbidden') {
             this.skipChargesUntil = this.now() + TIMINGS.secondaryForbiddenSkip;
-          }
-          if (err.kind === 'rate_limited' || err.kind === 'unavailable') {
+          } else if (err.kind === 'rate_limited') {
             held = err;
+          } else {
+            // A secondary endpoint down never pauses the rest: only it waits.
+            const backoff = TIMINGS.backoff;
+            this.skipChargesUntil =
+              this.now() + backoff[Math.min(this.chargesFailures, backoff.length - 1)];
+            this.chargesFailures += 1;
           }
         }
       }
       if (generation !== this.generation) {
         return;
       }
-      await this.apply(points, charges);
+      await this.apply(points, list);
       if (generation !== this.generation) {
         return;
       }
-      await this.succeeded(points.size, points.size > 0 && charges === undefined);
+      await this.succeeded(points.size, points.size > 0 && list === undefined);
       if (held && generation === this.generation) {
         await this.failed(held);
       }
@@ -420,6 +455,11 @@ export class MontaApp {
     } finally {
       this.tryBlocked = false;
     }
+    if (generation !== this.generation) {
+      return;
+    }
+    // The requests of this read go to /data (the limit survives a restart).
+    await this.saveMemory();
     if (generation !== this.generation) {
       return;
     }
@@ -467,21 +507,33 @@ export class MontaApp {
     }
   }
 
-  async failed(err) {
+  /** A failure of the configuration `generation` (an older one changes nothing). */
+  async failed(err, generation = this.generation) {
+    if (generation !== this.generation) {
+      return;
+    }
     const reason = errorReason(err);
     if (FINAL.has(err.kind)) {
       // Final: never tried again automatically (refusals may lock the
       // application). Saving other credentials, or the test button, tries again.
+      // Only refused credentials leave a (salted) fingerprint: a 403 on the
+      // charge points comes with working ones.
       const salt = newSalt();
-      this.block = {
-        account: this.config.account,
-        kind: err.kind,
-        status: err.status,
-        salt,
-        fingerprint: fingerprint(salt, this.config.clientId, this.config.clientSecret),
-      };
+      this.block =
+        err.kind === 'forbidden'
+          ? { account: this.config.account, kind: err.kind, status: err.status }
+          : {
+              account: this.config.account,
+              kind: err.kind,
+              status: err.status,
+              salt,
+              fingerprint: fingerprint(salt, this.config.clientId, this.config.clientSecret),
+            };
       this.memory.block = this.block;
       await this.saveMemory();
+      if (generation !== this.generation) {
+        return;
+      }
       this.clearTimer();
       this.logger.warn(`Monta stopped: ${reason}; no automatic try`);
       await this.setStatus(false, this.blockMessage());
@@ -513,14 +565,29 @@ export class MontaApp {
     }
     this.failures += 1;
     this.pausedUntil = Math.max(this.pausedUntil, this.now() + wait);
-    this.memory.pause = { kind: this.pauseKind, until: this.pausedUntil };
+    this.memory.pause = {
+      kind: this.pauseKind,
+      until: this.pausedUntil,
+      account: this.config.account,
+    };
     await this.saveMemory();
+    if (generation !== this.generation) {
+      return;
+    }
     await this.setStatus(err.kind === 'rate_limited' && this.readOnce, message);
     this.logger.warn(`Monta: ${reason}; next try in ${Math.round(wait / 1000)} s`);
   }
 
   /** A read: the charge points and (when read) their charges. */
-  async apply(points, charges) {
+  async apply(points, list) {
+    const charges = list ? currentCharges(list) : undefined;
+    // Every charge of the list, by id: a charge kept as in progress is let go
+    // only once it is seen finished (never because it left the bounded list).
+    const seen = new Map();
+    for (const item of list ?? []) {
+      const charge = readCharge(item);
+      if (charge) seen.set(charge.id, charge);
+    }
     const next = new Map();
     for (const [id, point] of points) {
       const previous = this.points.get(id);
@@ -531,14 +598,30 @@ export class MontaApp {
     this.points = next;
     this.readOnce = true;
     const known = new Map();
-    for (const [id, { charge }] of next) {
-      known.set(id, charges ? (isActive(charge) ? charge.id : null) : (this.known.get(id) ?? null));
+    const now = this.now();
+    for (const [id, { point }] of next) {
+      const previous = this.known.get(id) ?? null;
+      let kept = previous;
+      if (charges) {
+        const active = activeCharge(list, id);
+        if (active) {
+          kept = active.id;
+        } else {
+          const last = previous === null ? undefined : seen.get(previous);
+          // Gone from the list but the charge point still busy: kept.
+          const finished = last !== undefined && !isActive(last);
+          kept = previous !== null && !finished && busy(point.state) ? previous : null;
+        }
+        // The read serves the stops of the next 30 s.
+        this.freshReads.set(id, { at: now, active: active ?? null });
+      }
+      known.set(id, kept);
     }
     this.known = known;
     await this.rememberPoints();
     if (charges) {
       for (const id of next.keys()) {
-        this.checkWatch(id, charges.get(id));
+        this.checkWatch(id, activeCharge(list, id));
       }
     }
     await this.publishDevices();
@@ -755,19 +838,38 @@ export class MontaApp {
     return outcome;
   }
 
-  /** A command error -> the refusal shown, after its effects (pause, follow-up). */
-  async commandError(err, { id, isStop }) {
+  /**
+   * A command error -> the refusal shown, after its effects (pause, block,
+   * follow-up), those only for the configuration `generation`. Nothing left
+   * (`notSent`: the token, the checks, the deadline) is never "sent".
+   */
+  async commandError(err, { id, isStop, generation }) {
     if (err instanceof Refusal) {
       return err;
     }
+    const mine = generation === this.generation;
     const reason = errorReason(err);
     this.logger.warn(`Monta: ${isStop ? 'stop' : 'start'} failed (${reason})`);
     if (err.notSent) {
+      if (err.kind === 'refused' || err.kind === 'login_rejected') {
+        // The credentials refused while getting a token: final, as for a read
+        // (a scene pressing the button never sends them again in a loop).
+        if (mine && !this.block) {
+          await this.failed(err, generation);
+        }
+        return this.refusal(ERRORS.credentialsRefused);
+      }
+      if (err.kind === 'rate_limited' && mine) {
+        await this.failed(err, generation);
+        this.scheduleNext();
+      }
       return this.refusal(err.kind === 'timeout' ? ERRORS.tooSlow : ERRORS.notSent(reason));
     }
     if (err.kind === 'rate_limited') {
-      await this.failed(err);
-      this.scheduleNext();
+      if (mine) {
+        await this.failed(err, generation);
+        this.scheduleNext();
+      }
       return this.refusal(ERRORS.refused(reason));
     }
     if (err.kind === 'forbidden') {
@@ -784,15 +886,19 @@ export class MontaApp {
         'no_credentials',
       ].includes(err.kind)
     ) {
-      this.followUp();
+      if (mine) {
+        this.followUp();
+      }
       return this.refusal(ERRORS.refused(reason));
     }
     // A 5xx, a silence or a broken answer after the request left: it may
     // have reached Monta.
-    if (!isStop) {
-      this.unconfirmedUntil.set(id, this.now() + TIMINGS.guard);
+    if (mine) {
+      if (!isStop) {
+        this.unconfirmedUntil.set(id, this.now() + TIMINGS.guard);
+      }
+      this.followUp();
     }
-    this.followUp();
     return this.refusal(ERRORS.sentUnconfirmed(reason));
   }
 
@@ -802,8 +908,8 @@ export class MontaApp {
     if (this.starts.has(id) || this.stops.has(id)) {
       throw this.refusal(ERRORS.stillRunning);
     }
-    // The fresh read (two requests) and the start itself.
-    if (this.limiter.room() < 3) {
+    // The token, the fresh read (two requests), the start and one new try.
+    if (this.limiter.room() < LIMITS.startNeed) {
       throw this.refusal(ERRORS.noRoom);
     }
     const entry = { stopSeq: this.stopSeq.get(id) ?? 0, sent: false };
@@ -836,22 +942,25 @@ export class MontaApp {
     let active;
     try {
       const [pointJson, charges] = await Promise.all([
-        client.chargePoint(id, { deadline: readBy }),
+        client.chargePoint(id, { deadline: readBy, login: 'once' }),
         client.charges(
           {
             chargePointId: id,
             from: this.now() - TIMINGS.chargesWindow,
             perPage: LIMITS.commandCharges,
           },
-          { deadline: readBy },
+          { deadline: readBy, login: 'once' },
         ),
       ]);
       point = readChargePoint(pointJson);
       active = activeCharge(charges, id);
     } catch (err) {
-      if (err.kind === 'rate_limited') {
-        await this.failed(err);
+      if (err.kind === 'rate_limited' && generation === this.generation) {
+        await this.failed(err, generation);
         this.scheduleNext();
+      }
+      if ((err.kind === 'refused' || err.kind === 'login_rejected') && err.notSent) {
+        throw await this.commandError(err, { id, isStop: false, generation });
       }
       throw this.refusal(ERRORS.unknownState(errorReason(err)));
     }
@@ -867,6 +976,10 @@ export class MontaApp {
         return undefined;
       }
       throw this.refusal(ERRORS.chargeInProgress(CHARGE_STATE_NAMES[active.state]));
+    }
+    if (point.state === POINT_STATE.BUSY_CHARGING) {
+      // Charging, though no charge of the bounded list shows it: already so.
+      return undefined;
     }
     if (NOT_READY.has(point.state)) {
       throw this.refusal(ERRORS.notReady(POINT_STATE_NAMES[point.state]));
@@ -885,9 +998,11 @@ export class MontaApp {
       }
       entry.sent = true;
       this.startSentAt.set(id, this.now());
+      // A read from before the start no longer tells the stops anything.
+      this.freshReads.delete(id);
     };
     this.logger.info(`Monta: start on charge point ${id}`);
-    const request = client.start(id, { sendBy, beforeSend });
+    const request = client.start(id, { sendBy, beforeSend, login: 'once' });
     const settle = (json) => this.started_(id, json, entry, generation);
     const outcome = await this.race(request, received);
     if (outcome.pending) {
@@ -895,15 +1010,13 @@ export class MontaApp {
       this.unconfirmedUntil.set(id, this.now() + TIMINGS.guard);
       const background = request
         .then(settle, async (err) => {
-          if (generation === this.generation) {
-            await this.commandError(err, { id, isStop: false });
-          }
+          await this.commandError(err, { id, isStop: false, generation });
         })
         .catch(() => {});
       throw Object.assign(this.refusal(ERRORS.pending), { background });
     }
     if (outcome.err) {
-      throw await this.commandError(outcome.err, { id, isStop: false });
+      throw await this.commandError(outcome.err, { id, isStop: false, generation });
     }
     settle(outcome.json);
     return undefined;
@@ -957,58 +1070,98 @@ export class MontaApp {
     return promise;
   }
 
+  /** Why a stop had no fresh read (the refusals say it exactly). */
+  stopReadSkipped(readBy, need) {
+    if (this.paused) return REASONS.pause;
+    if (this.block) return REASONS.blocked;
+    if (this.limiter.room() < need) return REASONS.limit;
+    if (readBy - this.now() < TIMINGS.commandMinRead) return REASONS.time;
+    return undefined;
+  }
+
   async stop_(id, received) {
     const generation = this.generation;
     const sendBy = received + TIMINGS.commandSendBy;
     const readBy = sendBy - TIMINGS.commandMinSend;
     const client = this.client;
+    // Refused credentials are never sent again by a command; else one login of its own.
+    const login = this.block && this.block.kind !== 'forbidden' ? 'never' : 'once';
     // A start of ours that may still land (in flight or unconfirmed).
     const mayLand = () =>
       Boolean(this.starts.get(id)?.sent) || this.now() < (this.unconfirmedUntil.get(id) ?? 0);
-    // A fresh read when it costs nothing to the stop: else one request.
-    const oneRequest = this.paused || this.block || !this.readOnce || this.limiter.room() < 2;
-    let fresh = false;
-    let chargeId;
-    let readError;
-    if (!oneRequest && readBy - this.now() >= TIMINGS.commandMinRead) {
-      try {
-        const charges = await client.charges(
-          {
-            chargePointId: id,
-            from: this.now() - TIMINGS.chargesWindow,
-            perPage: LIMITS.commandCharges,
-          },
-          { deadline: readBy },
-        );
-        fresh = true;
-        chargeId = activeCharge(charges, id)?.id;
-      } catch (err) {
-        readError = err;
-        if (err.kind === 'rate_limited') {
-          await this.failed(err);
-          this.scheduleNext();
+
+    // The charges of the charge point, fresh: from a read of the last 30 s,
+    // else one request when it leaves room for the stop (and for the
+    // periodic read when it is due), never during a pause or a block.
+    let fresh = this.freshReads.get(id);
+    if (fresh && this.now() - fresh.at >= TIMINGS.freshReuse) {
+      fresh = undefined;
+    }
+    let why;
+    if (!fresh) {
+      const due = this.nextReadIn() === 0;
+      const need = LIMITS.stopReadNeed + (due ? LIMITS.readNeed : 0);
+      why = this.stopReadSkipped(readBy, need);
+      if (!why) {
+        try {
+          const list = await client.charges(
+            {
+              chargePointId: id,
+              from: this.now() - TIMINGS.chargesWindow,
+              perPage: LIMITS.commandCharges,
+            },
+            { deadline: readBy, login },
+          );
+          const finished = new Set();
+          for (const item of list) {
+            const charge = readCharge(item);
+            if (charge?.chargePointId === id && !isActive(charge)) finished.add(charge.id);
+          }
+          fresh = { at: this.now(), active: activeCharge(list, id) ?? null, finished };
+          if (generation === this.generation) {
+            this.freshReads.set(id, fresh);
+          }
+        } catch (err) {
+          if (err.notSent && (err.kind === 'refused' || err.kind === 'login_rejected')) {
+            throw await this.commandError(err, { id, isStop: true, generation });
+          }
+          if (err.kind === 'rate_limited' && generation === this.generation) {
+            await this.failed(err, generation);
+            this.scheduleNext();
+          }
+          why = { en: errorReason(err), fr: errorReason(err) };
+          this.logger.warn(`Monta: stop without a fresh read (${errorReason(err)})`);
         }
-        this.logger.warn(`Monta: stop without a fresh read (${errorReason(err)})`);
       }
     }
-    if (!fresh) {
-      chargeId = this.known.get(id) ?? undefined;
-    }
+    // The charge to stop: the one in progress just read, else the one kept
+    // (never one the fresh read saw finished). Absent from a bounded read is
+    // never "nothing in progress" while a charge is kept.
+    const known = this.known.get(id) ?? null;
+    const keptStillOn = known !== null && !(fresh?.finished?.has(known) ?? false);
+    const chargeId = fresh?.active?.id ?? (keptStillOn ? known : undefined);
     if (!chargeId) {
+      const landing = mayLand();
+      if (landing) {
+        // A start of ours may still land: watched, it will be stopped.
+        this.watch(id, { mayLand: true });
+        this.followUp();
+      }
       if (fresh) {
-        // Nothing in progress now. A start of ours may still land: watched.
-        if (mayLand()) {
-          this.watch(id, { mayLand: true });
-          this.followUp();
+        const point = this.points.get(id)?.point;
+        if (point?.state === POINT_STATE.BUSY_CHARGING && !landing) {
+          throw this.refusal(ERRORS.noChargeFound);
         }
         return;
       }
-      throw this.refusal(ERRORS.noChargeKnown(readError ? errorReason(readError) : 'pause'));
+      throw this.refusal(landing ? ERRORS.watchArmed : ERRORS.noChargeKnown(why ?? REASONS.time));
     }
     const landing = mayLand();
     this.logger.info(`Monta: stop on charge point ${id}`);
+    this.freshReads.delete(id);
     const request = client.stop(chargeId, {
       sendBy: Math.max(sendBy, this.now() + TIMINGS.commandMinSend),
+      login,
     });
     // The watch begins when the stop leaves: a late start is stopped again.
     this.watch(id, { chargeId, mayLand: landing });
@@ -1019,20 +1172,20 @@ export class MontaApp {
         this.known.set(id, null);
         this.rememberPoints().catch(() => {});
       }
-      this.followUp();
+      if (generation === this.generation) {
+        this.followUp();
+      }
     };
     if (outcome.pending) {
       request
         .then(settle, async (err) => {
-          if (generation === this.generation) {
-            await this.commandError(err, { id, isStop: true });
-          }
+          await this.commandError(err, { id, isStop: true, generation });
         })
         .catch(() => {});
       throw this.refusal(ERRORS.pending);
     }
     if (outcome.err) {
-      throw await this.commandError(outcome.err, { id, isStop: true });
+      throw await this.commandError(outcome.err, { id, isStop: true, generation });
     }
     settle(outcome.json);
   }
@@ -1040,10 +1193,12 @@ export class MontaApp {
   // --- Watch after a stop ------------------------------------------------------------
 
   /**
-   * After a stop left: for 90 s, a read showing that charge (or, when a start
-   * of ours could still land, any charge) drawing again sends the stop again,
-   * twice at most. A charge started by someone else afterwards (another id,
-   * no start of ours pending) is never stopped.
+   * After a stop: for 90 s (and at least until a read after it), a read
+   * showing the stopped charge drawing again sends the stop again. When a
+   * start of ours could still land, any charge in progress of the charge
+   * point (reserved, scheduled, paused included) is stopped: a charge started
+   * from the Monta app in that window is stopped too. Twice at most; a failed
+   * resend is not counted and lengthens the watch, 10 minutes at most.
    */
   watch(id, { chargeId, mayLand = false }) {
     const held = this.watches.get(id);
@@ -1054,33 +1209,40 @@ export class MontaApp {
       until: now + TIMINGS.guard,
       chargeId: chargeId ?? (active ? held.chargeId : undefined),
       mayLand: mayLand || Boolean(active && held.mayLand),
+      checked: false,
       // A renewed watch keeps what its reaffirmations already spent.
       reasserts: active ? held.reasserts : 0,
     });
   }
 
+  /** A read of the charges: `charge`, the one in progress of the charge point (or undefined). */
   checkWatch(id, charge) {
     const watch = this.watches.get(id);
     if (!watch) {
       return;
     }
     const now = this.now();
-    if (now >= watch.until) {
+    if (now - watch.sentAt >= TIMINGS.watchMax || (now >= watch.until && watch.checked)) {
       this.watches.delete(id);
       return;
     }
+    if (now - watch.sentAt < TIMINGS.stopSettle) {
+      return;
+    }
+    watch.checked = true;
     if (
       !charge ||
-      !DRAWING_CHARGE_STATES.has(charge.state) ||
-      now - watch.sentAt < TIMINGS.stopSettle ||
       watch.reasserts >= TIMINGS.stopReasserts ||
       (this.startSentAt.get(id) ?? -Infinity) > watch.sentAt
     ) {
       return;
     }
-    if (charge.id === watch.chargeId || watch.mayLand) {
+    const again = watch.mayLand
+      ? isActive(charge) && charge.state !== CHARGE_STATE.STOPPING
+      : charge.id === watch.chargeId && DRAWING_CHARGE_STATES.has(charge.state);
+    if (again) {
       watch.reasserts += 1;
-      this.logger.warn('Monta: a charge is drawing again after a stop, stop sent again');
+      this.logger.warn('Monta: a charge is in progress again after a stop, stop sent again');
       this.reassertStop(id, charge.id);
     }
   }
@@ -1088,19 +1250,25 @@ export class MontaApp {
   /** Sends a stop again (no read, no option): one request, its failure only logged. */
   reassertStop(id, chargeId) {
     const generation = this.generation;
+    const login = this.block && this.block.kind !== 'forbidden' ? 'never' : 'once';
     this.client
-      .stop(chargeId, {})
-      .then(() => this.followUp())
+      .stop(chargeId, { login })
+      .then(() => {
+        if (generation === this.generation) this.followUp();
+      })
       .catch(async (err) => {
         this.logger.warn(`Monta: stop sent again failed (${errorReason(err)})`);
+        if (generation !== this.generation) {
+          return;
+        }
         const watch = this.watches.get(id);
         if (watch) {
           // A failed resend never spends a reaffirmation.
           watch.reasserts = Math.max(0, watch.reasserts - 1);
-          watch.until = Math.min(watch.sentAt + 10 * MINUTE, watch.until + TIMINGS.guard);
+          watch.until = Math.min(watch.sentAt + TIMINGS.watchMax, this.now() + TIMINGS.guard);
         }
-        if (err.kind === 'rate_limited' && generation === this.generation) {
-          await this.failed(err);
+        if (err.kind === 'rate_limited') {
+          await this.failed(err, generation);
           this.scheduleNext();
         } else {
           this.followUp();
@@ -1111,13 +1279,18 @@ export class MontaApp {
 
   /**
    * A read after a command (its effect), whatever the interval: one pending
-   * at a time, it still waits for a pause and for the limit of requests.
+   * at a time, at least a minute after the previous one, and it still waits
+   * for a pause and for the limit of requests.
    */
   followUp() {
     if (this.followTimer) {
       this.timers.clearTimeout(this.followTimer);
     }
     const generation = this.generation;
+    const delay = Math.max(
+      TIMINGS.followUp,
+      this.lastFollowUpAt + TIMINGS.followUpGap - this.now(),
+    );
     this.followTimer = this.timers.setTimeout(() => {
       this.followTimer = undefined;
       if (generation === this.generation) {
@@ -1126,7 +1299,7 @@ export class MontaApp {
           .then(() => this.tick({ followUp: true }))
           .catch(() => this.logger.error('Monta refresh failed'));
       }
-    }, TIMINGS.followUp);
+    }, delay);
   }
 }
 

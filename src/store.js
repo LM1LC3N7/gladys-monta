@@ -4,11 +4,12 @@
 // itself, never the location of a charge point:
 //   - the time of the last read attempt (written before each read, at most
 //     once a minute): a restart never reads sooner than the interval;
-//   - the end of a 429 or 5xx pause (bounded);
-//   - a stop after refused credentials (or a 403 on the charge points): final,
-//     no automatic try. It holds a salted fingerprint of the REFUSED
-//     credentials only (never of working ones), so saving other credentials
-//     lifts it; it is erased at the first success;
+//   - the times of the requests of the last minute (the limit of Monta);
+//   - the end of a 429 or 5xx pause (bounded), with its account;
+//   - a stop after refused credentials: final, no automatic try. It holds a
+//     salted fingerprint of the REFUSED credentials only, so saving other
+//     credentials lifts it; it is erased at the first success. A stop after
+//     a 403 on the charge points (credentials accepted) holds no fingerprint;
 //   - per account (a hash of the client id), the ids of the charge points and
 //     of their charge in progress, so a stop stays possible after a restart,
 //     before the first read.
@@ -75,25 +76,35 @@ export function normalizeMemory(raw, now) {
 
   const p = raw?.pause;
   const until = bounded(p?.until, now);
-  const pause = until !== undefined && PAUSES.has(p?.kind) ? { kind: p.kind, until } : null;
+  // A pause belongs to its account (the limit of Monta is per user).
+  const pause =
+    until !== undefined &&
+    PAUSES.has(p?.kind) &&
+    typeof p.account === 'string' &&
+    HEX.test(p.account)
+      ? { kind: p.kind, until, account: p.account }
+      : null;
 
   const b = raw?.block;
-  const block =
-    typeof b?.account === 'string' &&
-    HEX.test(b.account) &&
-    BLOCKS.has(b.kind) &&
-    typeof b.salt === 'string' &&
+  const owned = typeof b?.account === 'string' && HEX.test(b.account) && BLOCKS.has(b.kind);
+  const fingerprinted =
+    typeof b?.salt === 'string' &&
     HEX.test(b.salt) &&
-    typeof b.fingerprint === 'string' &&
-    HEX.test(b.fingerprint)
-      ? {
-          account: b.account,
-          kind: b.kind,
-          status: Number.isInteger(b.status) ? b.status : undefined,
-          salt: b.salt,
-          fingerprint: b.fingerprint,
-        }
-      : null;
+    typeof b?.fingerprint === 'string' &&
+    HEX.test(b.fingerprint);
+  const status = Number.isInteger(b?.status) ? b.status : undefined;
+  // A 403 on the charge points holds no fingerprint; a refusal needs one.
+  const block = !owned
+    ? null
+    : b.kind === 'forbidden'
+      ? { account: b.account, kind: b.kind, status }
+      : fingerprinted
+        ? { account: b.account, kind: b.kind, status, salt: b.salt, fingerprint: b.fingerprint }
+        : null;
+
+  const requests = (Array.isArray(raw?.requests) ? raw.requests : [])
+    .filter((t) => Number.isFinite(t) && t <= now)
+    .slice(-LIMITS.requestsPerMinute);
 
   const s = raw?.points;
   const points =
@@ -110,5 +121,5 @@ export function normalizeMemory(raw, now) {
         }
       : null;
 
-  return { lastAttemptAt, pause, block, points };
+  return { lastAttemptAt, pause, block, points, requests };
 }

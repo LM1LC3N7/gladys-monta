@@ -122,6 +122,12 @@ export const TIMINGS = {
   commandMinSend: 300,
   /** Reads after a command (its effect), each one a full read. */
   followUp: 20 * SECOND,
+  /** Two follow-up reads are at least this far apart. */
+  followUpGap: MINUTE,
+  /** A fresh read of a charge point's charges serves the stops this long. */
+  freshReuse: 30 * SECOND,
+  /** A watch after a stop whose resends fail lasts at most this long. */
+  watchMax: 10 * MINUTE,
   /** A start not confirmed may still land: a stop sent within this window is reaffirmed. */
   guard: 90 * SECOND,
   /** A stop is reaffirmed at most this many times. */
@@ -139,15 +145,24 @@ export const LIMITS = {
   responseBytes: 1024 * 1024,
   /** Monta: 10 requests per minute for all the applications of a user. */
   requestsPerMinute: 10,
-  /** A periodic read starts only if this many requests stay free for the commands. */
-  reservedForCommands: 4,
+  /**
+   * The requests a periodic read may take: a token, the pages of charge
+   * points, the charges, and one new try after a refused token.
+   */
+  readNeed: 1 + 2 + 1 + 1,
+  /** A periodic read starts only if this many more stay free (a stop: token, read, stop). */
+  reservedForCommands: 3,
+  /** A start: a token, two reads, the start and one new try after a refused token. */
+  startNeed: 5,
+  /** A stop's fresh read: a token, the read and the stop itself. */
+  stopReadNeed: 3,
   /** Charge points per page, and pages read per cycle. */
   perPage: 100,
   pages: 2,
   /** Charges read per cycle (the most recent of the window). */
   chargesPerPage: 100,
-  /** Charges read before a command, for one charge point. */
-  commandCharges: 20,
+  /** Charges read before a command, for one charge point (one request whatever the count). */
+  commandCharges: 100,
   /** Devices published at most. */
   chargePoints: 50,
   /** Gladys: 300 states per minute, 100 per request. */

@@ -129,6 +129,17 @@ export const T = {
   },
 };
 
+/** Why a stop had no fresh read. */
+export const REASONS = {
+  pause: both('pause asked by Monta', 'pause demandée par Monta'),
+  blocked: both('connection stopped', 'connexion arrêtée'),
+  limit: both(
+    'limit of 10 requests per minute of Monta',
+    'limite de 10 requêtes par minute de Monta',
+  ),
+  time: both('no time left', 'plus le temps'),
+};
+
 /** Command errors: one language, the one of the configuration (Gladys shows the message as is). */
 export const ERRORS = {
   readOnly: both('This feature is read only.', 'Cette fonctionnalité est en lecture seule.'),
@@ -177,9 +188,21 @@ export const ERRORS = {
     ),
   noChargeKnown: (reason) =>
     both(
-      `The charges could not be read (${reason}) and no charge in progress is known: nothing was sent.`,
-      `Les charges n'ont pas pu être lues (${reason}) et aucune charge en cours n'est connue : rien n'a été envoyé.`,
+      `The charges could not be read (${reason.en}) and no charge in progress is known: nothing was sent.`,
+      `Les charges n'ont pas pu être lues (${reason.fr}) et aucune charge en cours n'est connue : rien n'a été envoyé.`,
     ),
+  noChargeFound: both(
+    'The charge point is charging, but no charge in progress is among its charges of the last 7 days: nothing was sent. Stop it from the Monta app.',
+    "La borne est en charge, mais aucune charge en cours ne figure parmi ses charges des 7 derniers jours : rien n'a été envoyé. Arrêtez-la depuis l'application Monta.",
+  ),
+  watchArmed: both(
+    'No charge to stop yet, but a start sent may still land: it will be stopped as soon as a read shows it.',
+    "Aucune charge à arrêter pour l'instant, mais un démarrage envoyé peut encore aboutir : il sera arrêté dès qu'une lecture le montrera.",
+  ),
+  credentialsRefused: both(
+    'Monta refused the client id or the client secret: the command was not sent.',
+    "Monta a refusé l'identifiant client ou le secret client : la commande n'a pas été envoyée.",
+  ),
   tooSlow: both(
     'Monta answered too slowly: the command was not sent, try again.',
     "Monta a répondu trop lentement : la commande n'a pas été envoyée, réessayez.",

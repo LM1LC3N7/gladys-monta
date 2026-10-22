@@ -13,15 +13,27 @@ test('the memory read back is repaired and bounded', () => {
   const memory = normalizeMemory(
     {
       lastAttemptAt: NOW + 10 * HOUR,
-      pause: { kind: 'rate', until: NOW + 100 * HOUR },
+      pause: { kind: 'rate', until: NOW + 100 * HOUR, account: HEX16 },
       block: { account: HEX16, kind: 'refused', salt: HEX16, fingerprint: 'zz' },
       points: { account: HEX16, list: [{ id: 1, charge: 5 }, { id: -1 }, { id: 2, charge: 'x' }] },
+      requests: [NOW - 1000, NOW + 5000, 'x'],
     },
     NOW,
   );
   assert.equal(memory.lastAttemptAt, NOW, 'a time in the future counts as now');
-  assert.deepEqual(memory.pause, { kind: 'rate', until: NOW + 24 * HOUR });
+  assert.deepEqual(memory.pause, { kind: 'rate', until: NOW + 24 * HOUR, account: HEX16 });
   assert.equal(memory.block, null, 'an odd fingerprint is dropped');
+  assert.deepEqual(memory.requests, [NOW - 1000]);
+  assert.equal(
+    normalizeMemory({ pause: { kind: 'rate', until: NOW + HOUR } }, NOW).pause,
+    null,
+    'a pause belongs to an account',
+  );
+  assert.deepEqual(
+    normalizeMemory({ block: { account: HEX16, kind: 'forbidden', status: 403 } }, NOW).block,
+    { account: HEX16, kind: 'forbidden', status: 403 },
+    'a 403 block holds no fingerprint',
+  );
   assert.deepEqual(memory.points.list, [
     { id: 1, charge: 5 },
     { id: 2, charge: null },
@@ -31,6 +43,7 @@ test('the memory read back is repaired and bounded', () => {
     pause: null,
     block: null,
     points: null,
+    requests: [],
   });
 });
 

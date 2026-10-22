@@ -18,13 +18,19 @@ the notes of the version's GitHub Release.
   charge, vehicle battery, meter reading (a plain sensor, never an energy
   index).
 - "Stop the charge" button, always available, also during a pause asked by
-  Monta and right after a restart; reaffirmed for 90 s when a start may still
-  land.
+  Monta, at the limit of requests and right after a restart; a charge kept as
+  in progress is never dropped because it left the 7-day read; watched after
+  the stop (90 s, up to 10 min when resends fail), any charge stopped when a
+  start of ours may still land.
 - "Start a charge" button behind "Allow starting a charge" (off by default),
-  decided on a fresh read, the option checked again right before sending.
-- The limit of Monta (10 requests per minute) respected, with room kept for
-  the commands; 429 and 5xx pauses persisted; refused credentials stop for
-  good, without any automatic try.
+  decided on a fresh read (never on a charge point already charging), the
+  option checked again right before sending.
+- The limit of Monta (10 requests per minute) respected and kept across a
+  restart, with room kept for a stop; 429 and 5xx pauses persisted per
+  account; a 5xx on the charges alone pauses nothing; refused credentials
+  stop for good, without any automatic try, also from a command.
+- A command that never left (token, checks, deadline) is reported "not
+  sent", never "sent, without confirmation".
 - "Test the connection" button, documentation in English and French.
 
 [Unreleased]: https://github.com/LM1LC3N7/gladys-monta/commits/main

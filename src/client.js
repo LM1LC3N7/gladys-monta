@@ -53,6 +53,28 @@ export class Limiter {
   note() {
     this.times.push(this.now());
   }
+
+  /** The times of the last minute (persisted with the state). */
+  recent() {
+    this.prune();
+    return [...this.times];
+  }
+
+  /**
+   * The times persisted before a restart of the container (bounded, never in
+   * the future). A limiter that already counts requests (a new configuration
+   * in the same process) keeps its own: they are the same requests.
+   */
+  restore(times) {
+    if (this.times.length > 0) {
+      return;
+    }
+    const now = this.now();
+    this.times = (Array.isArray(times) ? times : [])
+      .filter((t) => Number.isFinite(t) && t <= now && now - t < MINUTE)
+      .slice(-LIMITS.requestsPerMinute)
+      .sort((a, b) => a - b);
+  }
 }
 
 /** A date of Monta (ISO 8601) -> ms, or `fallback` when unreadable. */
@@ -73,8 +95,14 @@ export function tokensOf(json, now) {
   ) {
     throw new MontaError('bad_response', 'Monta sent no token');
   }
-  const accessExpiresAt = dateOr(json.accessTokenExpirationDate, now + TIMINGS.accessLifetime);
-  const refreshExpiresAt = dateOr(json.refreshTokenExpirationDate, now + TIMINGS.refreshLifetime);
+  // An expiry already (nearly) past says the clocks disagree, not that the
+  // token is dead: the documented lifetime then (never a renewal per request).
+  const expiry = (value, lifetime) => {
+    const at = dateOr(value, now + lifetime);
+    return at - now > 2 * TIMINGS.tokenRenewMargin ? at : now + lifetime;
+  };
+  const accessExpiresAt = expiry(json.accessTokenExpirationDate, TIMINGS.accessLifetime);
+  const refreshExpiresAt = expiry(json.refreshTokenExpirationDate, TIMINGS.refreshLifetime);
   return {
     accessToken: json.accessToken,
     refreshToken: json.refreshToken,
@@ -172,12 +200,20 @@ export class MontaClient {
     return this.tokens;
   }
 
-  /** The client credentials -> new tokens (monta-python's async_request_token). */
-  async login(deadline) {
+  /**
+   * The client credentials -> new tokens (monta-python's async_request_token).
+   * `login`: 'cycle' (once per read cycle), 'once' (a command: its own single
+   * try) or 'never' (the credentials were refused: never sent again by a
+   * command).
+   */
+  async login(deadline, login = 'cycle') {
     if (!this.hasCredentials) {
       throw new MontaError('no_credentials', 'no client id or secret');
     }
-    if (this.loggedIn) {
+    if (login === 'never') {
+      throw new MontaError('refused', 'credentials refused before, not sent again');
+    }
+    if (this.loggedIn && login !== 'once') {
       // Never asked twice in a cycle: a token refused right after it was got
       // says something is wrong, not that a new one would do.
       throw new MontaError('unauthorized', 'a new token was refused in this cycle');
@@ -192,7 +228,7 @@ export class MontaClient {
   }
 
   /** The refresh token -> new tokens; refused, the client credentials once. */
-  async renew(deadline) {
+  async renew(deadline, login) {
     const refreshToken = this.tokens?.refreshToken;
     if (refreshToken && this.now() < this.tokens.refreshRenewAt) {
       try {
@@ -209,11 +245,11 @@ export class MontaClient {
         this.tokens = null;
       }
     }
-    return this.login(deadline);
+    return this.login(deadline, login);
   }
 
   /** A usable access token (renewed when due). */
-  async accessToken({ deadline } = {}) {
+  async accessToken({ deadline, login } = {}) {
     if (this.authenticating) {
       // Joined: its failure is this caller's too (never a second request at once).
       await this.authenticating;
@@ -221,7 +257,7 @@ export class MontaClient {
     if (this.tokens && this.now() < this.tokens.accessRenewAt) {
       return this.tokens.accessToken;
     }
-    const tokens = await this.authenticate(() => this.renew(deadline));
+    const tokens = await this.authenticate(() => this.renew(deadline, login));
     return tokens.accessToken;
   }
 
@@ -241,14 +277,26 @@ export class MontaClient {
    *
    * `deadline`: the answer is due by then (a read). `sendBy`: the request
    * must leave by then, its answer may come later (a command).
+   *
+   * Whatever fails before the request itself leaves (the token, `beforeSend`,
+   * the deadline) is `notSent`: nothing reached Monta.
    */
-  async request(method, path, { payload, deadline, sendBy, beforeSend, onSent } = {}) {
+  async request(method, path, { payload, deadline, sendBy, beforeSend, onSent, login } = {}) {
     for (let attempt = 0; ; attempt += 1) {
-      const token = await this.accessToken({ deadline: sendBy ?? deadline });
-      const generation = this.tokenGeneration;
-      beforeSend?.();
-      if (sendBy !== undefined && sendBy - this.now() < TIMINGS.commandMinSend) {
-        throw new MontaError('timeout', 'no time left to send the command', { notSent: true });
+      let token;
+      let generation;
+      try {
+        token = await this.accessToken({ deadline: sendBy ?? deadline, login });
+        generation = this.tokenGeneration;
+        beforeSend?.();
+        if (sendBy !== undefined && sendBy - this.now() < TIMINGS.commandMinSend) {
+          throw new MontaError('timeout', 'no time left to send the command', { notSent: true });
+        }
+      } catch (err) {
+        if (err instanceof MontaError) {
+          err.notSent = true;
+        }
+        throw err;
       }
       try {
         return await this.send(method, path, {

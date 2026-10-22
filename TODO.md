@@ -63,32 +63,63 @@ up to date at the end of every milestone.
   latest one (`last-charge-energy-added`).
 - Commands are two `button/push` features, never a switch nor a writable
   binary. Stop: no option (protective), never held back by a pause, a block or
-  the limit (one request then), sent from the charge kept in /data before the
-  first read after a restart, shared when clicked twice, reaffirmed (twice at
-  most, for 90 s) when the stopped charge draws again or when a start of ours
-  could still land; a charge started later by someone else is left alone.
+  the limit (one request then), shared when clicked twice. Its charge: the one
+  in progress of a fresh read (one request when it leaves room for the stop
+  and, when the periodic read is due, for that read too; a read of the last
+  30 s, periodic or not, is reused), else the charge kept (never one the fresh
+  read saw finished). A charge kept as in progress is let go only when seen
+  finished or when the charge point is no longer busy: absent from the bounded
+  7-day read is never "nothing in progress". Success without sending only
+  when a fresh read shows nothing and the charge point is not charging;
+  otherwise an exact refusal (the reason of the missing read, or "charging but
+  no charge of the last 7 days").
+- Watch after a stop: 90 s and at least until a read after it; the stopped
+  charge drawing again is stopped again, twice at most; when a start of ours
+  may still land (in flight or unconfirmed), any active charge (reserved,
+  scheduled, paused included, `stopping` aside) is stopped, also one started
+  from the Monta app in that window. A stop that can neither read nor find a
+  charge still arms the watch then (and says so). A failed resend is not
+  counted and lengthens the watch, 10 minutes at most; follow-up reads are a
+  minute apart at least.
 - Start: `allow_start` (off) checked at the click and right before sending
   (beforeSend), with the account, the pause, a stop meanwhile and the 3.5 s
   deadline; decided on a fresh read of the charge point and its charges only
-  (vehicle plugged in, ready state, no charge in progress); Gladys answered
-  by 4.3 s ("sent, without confirmation" when Monta is still at work); a stop
-  arriving during the start stops the new charge as soon as its id is known.
+  (vehicle plugged in, ready state, no charge in progress, the charge point
+  not `busy-charging`: then nothing is sent); Gladys answered by 4.3 s ("sent,
+  without confirmation" when Monta is still at work); a stop arriving during
+  the start stops the new charge as soon as its id is known.
+- Anything failing before the command itself left (the token, the checks,
+  the deadline) is `notSent`: "not sent", never "sent, without confirmation",
+  and no "may land" window. Credentials refused while a command gets its
+  token: the same final stop as for a read; a command never sends refused
+  credentials again (no loop from a scene).
 - A refused access token (401) is replaced and the request sent once more
-  (Monta refused it before acting, as monta-python notes); at most one request
-  with the client credentials per cycle.
-- Final stops (no automatic try, persisted, lifted by new credentials or a
-  successful test): 401 or another 4xx on `auth/token`, 403 on
-  `charge-points`. A 403 on `charges` skips them for an hour; a 403 on a
-  command refuses that command only.
+  (Monta refused it before acting, as monta-python notes); one request with
+  the client credentials per read cycle, and one per command of its own.
+- A token whose expiry is already (nearly) past on arrival (clocks apart):
+  the documented lifetime instead, never a renewal before every request.
+- Final stops (no automatic try, persisted): 401 or another 4xx on
+  `auth/token` (with a salted fingerprint of the refused credentials, lifted
+  by other credentials or a successful test), 403 on `charge-points` (no
+  fingerprint: credentials accepted; lifted by saving the credentials again
+  or a successful test). A 403 on `charges` skips them for an hour, a 5xx for
+  the backoff, without pausing anything else; a 403 on a command refuses that
+  command only.
 - /data holds no secret: the time of the last attempt (before each read, at
-  most once a minute), the pauses, the ids of the charge points and of their
+  most once a minute), the times of the requests of the last minute, the
+  pauses (with their account), the ids of the charge points and of their
   charge in progress, and a salted fingerprint of refused credentials only.
   Tokens stay in memory: a restart asks for a new one (one request).
 - Rate limit: a sliding window of 60 s, 10 requests, shared by every client
-  of the app; a periodic read needs 3 free plus 4 kept for the commands; a
-  start needs 3 free; a stop is always sent.
+  of the app and kept across a restart; a periodic read needs 5 free (token,
+  2 pages, charges, one new try) plus 3 kept for a stop; a start needs 5; a
+  stop is always sent.
 - Never a read sooner than the interval (test button, `connected`, unchanged
   configuration, restart); only new credentials saved are tried at once. A
-  follow-up read 20 s after a command ignores the interval but not the pauses
-  nor the limit.
-- At most 50 charge points, 2 pages of 100 per read.
+  follow-up read after a command ignores the interval but not the pauses nor
+  the limit, and two are a minute apart at least.
+- The generation of the configuration is checked after every await, in the
+  reads, the commands and their errors: a late answer of an old
+  configuration never pauses, blocks nor sets the status of the new one.
+- At most 50 charge points, 2 pages of 100 per read; charges read over 7
+  days, 100 per request.
