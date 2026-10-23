@@ -1,6 +1,6 @@
 {
   "name": "gladys-monta",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Charge points managed by Monta for Gladys Assistant through the official Monta public API: state, vehicle plugged in, energy of the session, meter reading; start a charge behind an off-by-default option, stop always available.",
   "type": "module",
