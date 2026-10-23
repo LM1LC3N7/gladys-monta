@@ -83,6 +83,27 @@ test('N3/A10 a stop waiting for a slow token: "not sent yet", then it leaves', a
   assert.deepEqual(stops(server), ['POST charges/997/stop'], 'it left with the token');
 });
 
+test('Z6 a stop whose fresh read joins a slow token renewal answers Gladys within 5 s', async (t) => {
+  const server = montaServer({ charges: [charge({ id: 998, state: 'charging' })] });
+  const ctx = await setup(t, { server, config: EN });
+  await ctx.advance(30_000);
+  ctx.app.client.tokens = { ...ctx.app.client.tokens, accessRenewAt: 0 };
+  server.queue.push({
+    match: (r) => r.path.endsWith('/auth/refresh'),
+    wait: new Promise((resolve) => setTimeout(resolve, 96_000)),
+  });
+  await ctx.advance(91_000);
+  assert.ok(ctx.app.client.authenticating, 'a read waits for its slow renewal');
+  assert.ok(ctx.app.limiter.room() >= 3, 'room for a fresh read');
+  const clicked = Date.now();
+  const ack = await press(ctx, FEATURES.STOP);
+  assert.ok(Date.now() - clicked <= 5000, `answered after ${Date.now() - clicked} ms`);
+  assert.equal(ack.success, false);
+  assert.match(ack.error, /Stop not sent yet: it waits for a token from Monta and leaves only if/);
+  await ctx.advance(10_000, 100);
+  assert.deepEqual(stops(server), ['POST charges/998/stop'], 'it left with the token');
+});
+
 test('N4/A11 a 5xx on the charges: the status speaks of an outage, not of the scope', async (t) => {
   const server = montaServer();
   const ctx = await setup(t, { server, config: EN });

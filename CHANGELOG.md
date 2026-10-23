@@ -10,6 +10,15 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+### Fixed
+
+- A stop whose fresh read joined a slow token renewal could answer Gladys
+  after its 5 s: the wait is now bounded by the deadline of the command, the
+  stop going on from the charge kept ("Stop not sent yet: it waits for a
+  token from Monta").
+- The message of a stop waiting for a token no longer promises it will leave:
+  it leaves only if Monta gives the token. Described in the docs.
+
 ## [0.1.1] - 2026-10-22
 
 ### Added

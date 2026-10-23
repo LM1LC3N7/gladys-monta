@@ -80,6 +80,11 @@ charge point is never read into Gladys.
   error...), or the charge point is charging but no charge of the last 7 days
   is in progress (a charge started more than 7 days ago: stop it from the
   Monta app). Nothing sent is never reported as "sent".
+- "Stop not sent yet: it waits for a token from Monta": Gladys must be
+  answered within 5 s, and the stop was still waiting for an access token
+  (Monta slow to renew it). The stop leaves only if Monta gives the token;
+  if it does not, nothing is sent: check the state of the charge (the watch
+  after the stop and the next reads show it).
 - **Start a charge** refuses unless "Allow starting a charge" is on. It reads
   the charge point and its charges just before sending, and sends only when
   a vehicle is plugged in, the charge point is ready and no charge is in

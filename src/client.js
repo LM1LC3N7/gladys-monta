@@ -251,14 +251,39 @@ export class MontaClient {
   /** A usable access token (renewed when due). */
   async accessToken({ deadline, login } = {}) {
     if (this.authenticating) {
-      // Joined: its failure is this caller's too (never a second request at once).
-      await this.authenticating;
+      // Joined: its failure is this caller's too (never a second request at
+      // once), and a caller with a deadline never waits past it.
+      await this.joinWithin(this.authenticating, deadline);
     }
     if (this.tokens && this.now() < this.tokens.accessRenewAt) {
       return this.tokens.accessToken;
     }
     const tokens = await this.authenticate(() => this.renew(deadline, login));
     return tokens.accessToken;
+  }
+
+  /** Waits for `promise`, at most until `deadline` (then a `notSent` timeout). */
+  async joinWithin(promise, deadline) {
+    if (deadline === undefined) {
+      return promise;
+    }
+    let timer;
+    const late = new Promise((_, reject) => {
+      timer = setTimeout(
+        () =>
+          reject(
+            new MontaError('timeout', 'a token renewal still running at the deadline', {
+              notSent: true,
+            }),
+          ),
+        Math.max(0, deadline - this.now()),
+      );
+    });
+    try {
+      return await Promise.race([promise, late]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /** The access token was refused: it is dropped (not the refresh token). */

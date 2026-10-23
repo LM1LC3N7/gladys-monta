@@ -73,6 +73,24 @@ test('the token is renewed before its expiry, never trusted beyond an hour', () 
   assert.throws(() => tokensOf({ accessToken: '' }, now));
 });
 
+test('joining a token renewal never waits past the deadline of the caller', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
+  const c = client(fakeMonta());
+  let release;
+  c.authenticating = new Promise((resolve) => {
+    release = resolve;
+  });
+  const joined = c.accessToken({ deadline: 3000 }).then(
+    () => 'ok',
+    (err) => err,
+  );
+  t.mock.timers.tick(3000);
+  const err = await joined;
+  assert.equal(err.kind, 'timeout');
+  assert.equal(err.notSent, true);
+  release();
+});
+
 test('the limiter: 10 requests in any minute', () => {
   let now = 0;
   const limiter = new Limiter(() => now);

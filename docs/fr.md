@@ -85,6 +85,11 @@ compterait deux fois. L'emplacement de la borne n'est jamais lu dans Gladys.
   charge des 7 derniers jours n'est en cours (une charge démarrée il y a
   plus de 7 jours : arrêtez-la depuis l'application Monta). Rien de ce qui
   n'est pas parti n'est jamais annoncé « envoyé ».
+- « Arrêt pas encore envoyé : il attend un jeton de Monta » : Gladys doit
+  recevoir une réponse sous 5 s, et l'arrêt attendait encore un jeton d'accès
+  (Monta lent à le renouveler). L'arrêt ne part que si Monta donne le jeton ;
+  sinon rien n'est envoyé : vérifiez l'état de la charge (la surveillance
+  après l'arrêt et les lectures suivantes le montrent).
 - **Démarrer une charge** refuse tant que « Autoriser le démarrage d'une
   charge » est désactivé. Il lit la borne et ses charges juste avant l'envoi,
   et n'envoie que si un véhicule est branché, que la borne est prête et

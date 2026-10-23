@@ -187,8 +187,8 @@ export const ERRORS = {
     "Une charge est encore en cours sur cette borne (gardée depuis une lecture précédente) : le démarrage n'a pas été envoyé.",
   ),
   stopWaiting: both(
-    'Stop not sent yet: it waits for a token from Monta and leaves as soon as it gets one; the state follows.',
-    "Arrêt pas encore envoyé : il attend un jeton de Monta et part dès qu'il l'obtient ; l'état suivra.",
+    'Stop not sent yet: it waits for a token from Monta and leaves only if it gets one; check the state of the charge.',
+    "Arrêt pas encore envoyé : il attend un jeton de Monta et ne part que s'il l'obtient ; vérifiez l'état de la charge.",
   ),
   stopMeanwhile: both(
     'A stop arrived meanwhile: the start was not sent.',
